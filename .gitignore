@@ -30,3 +30,9 @@ Thumbs.db
 
 # Eval/output artefatti pesanti (i risultati .md restano tracciati)
 *.log
+
+# Tool / cache artefatti (non nel repo portfolio)
+.claude-flow/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
