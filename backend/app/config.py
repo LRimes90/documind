@@ -13,7 +13,10 @@ class Settings(BaseSettings):
     ollama_model: str = "llama3.1"
 
     # Modelli fastembed (multilingue IT+EN)
-    dense_model: str = "intfloat/multilingual-e5-small"
+    # NB: multilingual-e5-small non è tra i modelli supportati da fastembed 0.8.0.
+    # Uso paraphrase-multilingual-MiniLM-L12-v2 (~470MB, 384-dim, 50+ lingue,
+    # nessun prefisso query/passage richiesto).
+    dense_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
     sparse_model: str = "Qdrant/bm25"
     reranker_model: str = "jinaai/jina-reranker-v2-base-multilingual"
 
