@@ -102,6 +102,7 @@ Ogni unità ha uno scopo unico, interfaccia definita e testabilità isolata:
 5. Risposta: `{doc_id, doc_name, n_chunks, pages}`.
 
 ### 5.2 Query — `POST /query` (risposta in streaming SSE)
+0. **(Opzionale, config-gated) Query rewriting / HyDE**: la domanda viene riformulata/espansa (o si genera un "documento ipotetico") prima dell'embedding, per migliorare il recall su domande vaghe o cross-lingua.
 1. Embedding della domanda (dense + sparse).
 2. **Hybrid search**: due ricerche Qdrant (es. top-20 dense, top-20 sparse) → **Reciprocal Rank Fusion** fonde le due classifiche per *rango* (non per punteggio grezzo, perché cosine e BM25 hanno scale incompatibili) in un'unica lista di candidati.
 3. **Rerank**: cross-encoder ONNX multilingue (`jina-reranker-v2-base-multilingual`) assegna un punteggio (domanda, chunk) ai candidati → tiene i **top-5**.
@@ -118,6 +119,7 @@ Ogni unità ha uno scopo unico, interfaccia definita e testabilità isolata:
   1. dense-only *naive* (baseline)
   2. hybrid + RRF
   3. hybrid + RRF + rerank
+  4. hybrid + RRF + rerank + query rewriting (HyDE)
 - Stampa una tabella comparativa e la salva in `eval/results.md`.
 - README: *"esegui `uv run eval` per riprodurre questi numeri"*.
 
@@ -138,7 +140,7 @@ Ogni unità ha uno scopo unico, interfaccia definita e testabilità isolata:
   - `SourceViewer` — PDF.js che renderizza la pagina citata.
   - `useChat` — hook per lo streaming SSE.
   - `api.ts` — client HTTP tipizzato.
-- **Stretch (non blocca l'MVP):** highlight esatto dello snippet dentro la pagina PDF. Per l'MVP è sufficiente aprire la pagina corretta.
+- **MVP:** la citazione cliccabile apre il PDF alla pagina **e** evidenzia con highlight + scroll-to lo snippet citato (è l'effetto "wow" della demo).
 
 ---
 
@@ -167,11 +169,14 @@ Ogni unità ha uno scopo unico, interfaccia definita e testabilità isolata:
 ## 10. Criteri di successo (Definition of Done MVP)
 
 1. `git clone` → `uv sync` → avvio backend e frontend funziona con la sola `GEMINI_API_KEY`.
-2. Upload di ≥2 PDF, domanda, risposta in streaming con citazioni cliccabili che aprono la pagina corretta.
-3. `uv run eval` produce `eval/results.md` con la tabella naive/hybrid/hybrid+rerank.
+2. Upload di ≥2 PDF, domanda, risposta in streaming con citazioni cliccabili che aprono il PDF alla pagina ed evidenziano (highlight + scroll-to) lo snippet citato.
+3. `uv run eval` produce `eval/results.md` con la tabella a **4 config** (naive / hybrid / hybrid+rerank / hybrid+rerank+HyDE).
 4. Suite `pytest` verde; test frontend verdi.
-5. README con: cosa fa, GIF/demo, diagramma architettura, tabella eval, istruzioni run, sezione "offline mode".
-6. Offline mode (Ollama) documentata e funzionante come alternativa a Gemini.
+5. CI GitHub Actions verde su ogni push (test veloci) + badge nel README + tabella eval versionata.
+6. README con: cosa fa, GIF/demo, diagramma architettura, tabella eval, istruzioni run, sezione "offline mode", Roadmap.
+7. Offline mode (Ollama) documentata e funzionante come alternativa a Gemini.
+8. Harness stress-test: ≥100 scenari, tutti verdi, report generato.
+9. Repo creato **privato**; reso **pubblico** SOLO dopo stress-test verde (vedi §12).
 
 ---
 
@@ -180,3 +185,23 @@ Ogni unità ha uno scopo unico, interfaccia definita e testabilità isolata:
 - **Download modelli ONNX al primo avvio** (dense multilingue ~470 MB + reranker → indicativamente ~600–900 MB totali): documentato nel README; mitigato dal fatto che fastembed cache-a i modelli dopo il primo download.
 - **Compatibilità wheel su Python 3.12**: mitigato dal pinning via `uv`.
 - **Qualità eval su dataset piccolo**: ~20 domande è indicativo, non statisticamente robusto; dichiarato apertamente nel README.
+
+---
+
+## 12. CI, stress-test e workflow di rilascio
+
+**CI (GitHub Actions):** su ogni push esegue i test "veloci" (logica pura: RRF, chunker, prompt, metriche eval — nessun download di modelli). I test "lenti" (embeddings/rerank/pipeline, che scaricano modelli ONNX) sono marcati `@pytest.mark.slow` ed eseguiti separatamente (nightly o on-demand con cache modelli). Badge di stato + tabella eval versionata nel README.
+
+**Stress-test harness (`stress/`):** genera **≥100 scenari** che verificano l'intero sistema, con invarianti pass/fail:
+- *Retrieval correctness* (~40): gold page nei top-5, citazioni valide (pagina in range, doc esistente).
+- *Grounding negativo / anti-allucinazione* (~20): domande fuori-corpus → "non presente nei documenti" + citazioni vuote.
+- *Ingest robustness* (~15): molti PDF, PDF grande, vuoto/scannerizzato (→422), non-PDF respinto, unicode/multilingua, doppio ingest.
+- *Concorrenza/carico* (~15): query e ingest concorrenti → nessun crash, latenza entro soglia (Qdrant embedded è mono-processo: verificare serializzazione).
+- *Contratto API/edge* (~10): domanda vuota/lunghissima, query prima di ogni ingest (→400), payload malformato (→422), stream SSE che chiude con eventi `citations`+`done`.
+Output: report versionato (pass-rate, latenze p50/p95).
+
+**Workflow di rilascio:** sviluppo → repo GitHub **PRIVATO** → esecuzione stress-test (≥100) → **solo se tutto verde** il repo diventa **PUBBLICO**. Nessuna pubblicazione con stress-test rosso. (`gh` CLI non installato: installarlo o creare il repo privato a mano al momento del push.)
+
+## 13. Roadmap (post-MVP, dichiarata nel README)
+
+Feature emerse dalla prior-art GitHub, rimandate per non gonfiare l'MVP: supporto multi-formato (DOCX/PPTX/XLSX), observability (tracing OpenTelemetry/Langfuse + dashboard costi/latenza), retrieval vision/late-interaction (ColPali-style) per pagine con tabelle/grafici, self-reflection agentic ("risposta supportata dalle fonti? se no, ri-cerca").

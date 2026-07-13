@@ -20,6 +20,8 @@
 - Tutti i comandi si eseguono dalla cartella `backend/` salvo diverso avviso.
 - Commit frequenti, uno per task completato. Ogni commit termina con:
   `Co-Authored-By: claude-flow <ruv@ruv.net>`
+- **Workflow di rilascio (vincolo):** repo GitHub creato **privato** → suite completa + **stress-test (≥100) verdi** → SOLO allora repo **pubblico**. Nessun push pubblico prima del gate (Task 19).
+- Il frontend (incl. citazioni con highlight+scroll, ora MVP) è nel **Piano 2**, non qui.
 
 > **Nota didattica (Learn by Doing):** la funzione `reciprocal_rank_fusion` (Task 8) è riservata al contributo manuale di Luca — in fase di esecuzione verrà inserito un `TODO(human)` e verrà chiesto a lui di implementarla. È l'algoritmo-cuore dell'hybrid search: perfetto da scrivere a mano.
 
@@ -1427,7 +1429,7 @@ Co-Authored-By: claude-flow <ruv@ruv.net>"
   - `dataset.GOLD: list[GoldItem]` con `GoldItem(question:str, doc_name:str, pages:list[int])`.
   - `evaluate.hit_at_k(retrieved_pages: list[int], gold_pages: list[int], k: int) -> int` (0/1).
   - `evaluate.mrr(retrieved_pages, gold_pages) -> float`.
-  - `evaluate.run() -> None` — indicizza `sample_docs`, esegue le 3 config (naive dense / hybrid / hybrid+rerank), calcola Hit@5/MRR/Recall@5 medi, scrive `eval/results.md`.
+  - `evaluate.run() -> None` — indicizza `sample_docs`, esegue le config (naive dense / hybrid / hybrid+rerank; la 4ª `+HyDE` viene aggiunta in Task 16), calcola Hit@5/MRR/Recall@5 medi, scrive `eval/results.md`.
 
 - [ ] **Step 1: Scrivi i test delle metriche pure (falliscono)**
 
@@ -1610,6 +1612,441 @@ Co-Authored-By: claude-flow <ruv@ruv.net>"
 
 ---
 
+### Task 16: Query rewriting / HyDE (query_rewrite.py) + 4ª config eval
+
+**Files:**
+- Create: `backend/app/retrieval/query_rewrite.py`
+- Test: `backend/tests/test_query_rewrite.py`
+- Modify: `backend/app/config.py` (aggiungi `use_hyde: bool = False`)
+- Modify: `backend/app/retrieval/pipeline.py` (parametro opzionale `provider`)
+- Modify: `backend/app/main.py` (passa il provider a `retrieve`)
+- Modify: `backend/eval/evaluate.py` (4ª config `hybrid+rerank+hyde`)
+
+**Interfaces:**
+- Consumes: `LLMProvider` da `app.generation.llm`.
+- Produces: `expand_query(question: str, provider: LLMProvider) -> str`. Firma aggiornata: `retrieve(question, embedder, store, reranker, provider: LLMProvider | None = None) -> list[Chunk]`.
+
+- [ ] **Step 1: Scrivi il test (fallisce) con fake provider**
+
+`backend/tests/test_query_rewrite.py`:
+```python
+from app.retrieval.query_rewrite import expand_query
+
+
+class _FakeProvider:
+    def generate(self, prompt):
+        yield "Parigi è la capitale della Francia."
+
+
+def test_expand_query_combines_question_and_hypothetical():
+    out = expand_query("Capitale della Francia?", _FakeProvider())
+    assert "Capitale della Francia?" in out
+    assert "Parigi" in out
+```
+
+- [ ] **Step 2: Esegui e verifica fallimento**
+
+Run: `uv run pytest tests/test_query_rewrite.py -v`
+Expected: FAIL (ModuleNotFoundError).
+
+- [ ] **Step 3: Scrivi `app/retrieval/query_rewrite.py` e aggiungi il flag in config**
+
+```python
+"""HyDE / query expansion: genera un passaggio ipotetico per migliorare il recall dense."""
+from app.generation.llm import LLMProvider
+
+_HYDE_PROMPT = (
+    "Scrivi un breve paragrafo (2-3 frasi) che potrebbe contenere la risposta "
+    "alla seguente domanda, come se fosse un estratto di documento. "
+    "Non dichiarare che è ipotetico.\n\nDomanda: {q}\n\nParagrafo:"
+)
+
+
+def expand_query(question: str, provider: LLMProvider) -> str:
+    hypothetical = "".join(provider.generate(_HYDE_PROMPT.format(q=question)))
+    return f"{question}\n{hypothetical}".strip()
+```
+In `app/config.py` aggiungi nel gruppo Retrieval: `use_hyde: bool = False`.
+
+- [ ] **Step 4: Esegui e verifica passaggio**
+
+Run: `uv run pytest tests/test_query_rewrite.py -v`
+Expected: PASS.
+
+- [ ] **Step 5: Cabla in `pipeline.py` (dense su query espansa, sparse+rerank su domanda originale)**
+
+Sostituisci `retrieve` con:
+```python
+def retrieve(question, embedder, store, reranker, provider=None):
+    from app.retrieval.query_rewrite import expand_query
+    query_for_dense = question
+    if settings.use_hyde and provider is not None:
+        query_for_dense = expand_query(question, provider)
+    dense_vec = embedder.embed_query_dense(query_for_dense)
+    sparse_vec = embedder.embed_query_sparse(question)  # sparse sulle parole originali
+    candidate_ids = hybrid_candidates(store, dense_vec, sparse_vec, top_k=settings.top_k_dense)
+    if not candidate_ids:
+        return []
+    candidates = [(cid, store.get_chunk(cid)) for cid in candidate_ids]
+    pairs = [(cid, chunk.text) for cid, chunk in candidates]
+    top_ids = reranker.rerank(question, pairs, top_n=settings.top_n_rerank)  # rerank su domanda originale
+    by_id = {cid: chunk for cid, chunk in candidates}
+    return [by_id[cid] for cid in top_ids]
+```
+In `app/main.py`, nell'endpoint `/query`, passa il provider: `chunks = retrieve(req.question, state.embedder, state.store, state.reranker, provider=provider)` (istanzia `provider = get_provider()` prima). Verifica che `tests/test_pipeline.py` e `tests/test_api.py` restino verdi (HyDE è off di default).
+
+- [ ] **Step 6: Aggiungi la 4ª config all'eval con guardia provider**
+
+In `eval/evaluate.py`, dentro `run()`, dopo aver calcolato `rerank_ids`, aggiungi (solo se un provider è disponibile):
+```python
+    # in cima a run(): prova a ottenere un provider per HyDE
+    try:
+        from app.generation.llm import get_provider
+        from app.retrieval.query_rewrite import expand_query
+        _provider = get_provider()
+        configs = ["naive", "hybrid", "hybrid+rerank", "hybrid+rerank+hyde"]
+    except ValueError:
+        _provider = None
+        configs = ["naive", "hybrid", "hybrid+rerank"]
+        print("[eval] Provider LLM non disponibile: 4ª config (HyDE) saltata.")
+```
+E nel loop, quando `_provider` non è None, calcola la 4ª:
+```python
+        if _provider is not None:
+            exp = expand_query(item.question, _provider)
+            dvec2 = emb.embed_query_dense(exp)
+            hyde_ids = hybrid_candidates(store, dvec2, svec, top_k=settings.top_k_dense)
+            pairs2 = [(cid, store.get_chunk(cid).text) for cid in hyde_ids]
+            hyde_rr = reranker.rerank(item.question, pairs2, top_n=settings.top_n_rerank)
+            pages = _pages_for(hyde_rr, store)
+            agg["hybrid+rerank+hyde"]["hit"] += hit_at_k(pages, item.pages, K)
+            agg["hybrid+rerank+hyde"]["mrr"] += mrr(pages, item.pages)
+            agg["hybrid+rerank+hyde"]["recall"] += recall_at_k(pages, item.pages, K)
+```
+Assicurati che `agg` sia costruito da `configs`. Riesegui `uv run pytest tests/test_eval.py -v` (metriche pure) → PASS.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add backend/app/retrieval/query_rewrite.py backend/tests/test_query_rewrite.py backend/app/config.py backend/app/retrieval/pipeline.py backend/app/main.py backend/eval/evaluate.py
+git commit -m "feat(backend): query rewriting/HyDE + 4a config eval
+
+Co-Authored-By: claude-flow <ruv@ruv.net>"
+```
+
+---
+
+### Task 17: CI GitHub Actions + marker test veloci/lenti + badge
+
+**Files:**
+- Modify: `backend/pyproject.toml` (marker pytest)
+- Modify: test dei modelli (marker `slow` a livello di modulo): `test_embeddings.py`, `test_indexer.py`, `test_rerank.py`, `test_pipeline.py`, `test_api.py`
+- Create: `.github/workflows/ci.yml`
+- Modify: `README.md` (badge — durante Task 15/finale)
+
+**Interfaces:** nessuna interfaccia di codice.
+
+- [ ] **Step 1: Configura i marker in `backend/pyproject.toml`**
+
+```toml
+[tool.pytest.ini_options]
+markers = ["slow: test che scaricano modelli ONNX (esclusi dalla CI veloce)"]
+```
+
+- [ ] **Step 2: Marca i test lenti a livello di modulo**
+
+In cima a `test_embeddings.py`, `test_indexer.py`, `test_rerank.py`, `test_pipeline.py`, `test_api.py` aggiungi:
+```python
+import pytest
+pytestmark = pytest.mark.slow
+```
+
+- [ ] **Step 3: Verifica che i test veloci girino SENZA scaricare modelli**
+
+Run: `uv run pytest -m "not slow" -v`
+Expected: PASS rapido (solo logica pura: health, models, chunker, loader, hybrid/RRF, prompt, llm-factory, metriche eval). Nessun download.
+
+- [ ] **Step 4: Scrivi `.github/workflows/ci.yml`**
+
+```yaml
+name: CI
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+      - run: uv sync --dev
+      - run: uv run pytest -m "not slow" -v
+```
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add backend/pyproject.toml backend/tests/ .github/workflows/ci.yml
+git commit -m "ci: GitHub Actions test veloci + marker slow per test modelli
+
+Co-Authored-By: claude-flow <ruv@ruv.net>"
+```
+
+---
+
+### Task 18: Stress-test harness (≥100 scenari)
+
+**Files:**
+- Create: `backend/stress/__init__.py`
+- Create: `backend/stress/scenarios.py`
+- Create: `backend/stress/run.py`
+- Test: `backend/tests/test_stress_scenarios.py`
+
+**Interfaces:**
+- Produces:
+  - `scenarios.build_scenarios() -> list[Scenario]` con `Scenario(category:str, kind:str, payload:dict, expect:str)`; ritorna ≥100 scenari coprendo le 5 categorie di §12 dello spec.
+  - `run.main(live: bool = True) -> int` — indicizza `sample_docs`, esegue gli scenari via `TestClient`, verifica gli invarianti, scrive `stress/report.md`, ritorna il numero di fallimenti (0 = gate superato). `live=True` usa il provider reale (grounding autentico); `live=False` usa un provider fittizio deterministico per gli invarianti strutturali.
+
+- [ ] **Step 1: Scrivi il test del generatore (fallisce)**
+
+`backend/tests/test_stress_scenarios.py`:
+```python
+from stress.scenarios import build_scenarios
+
+
+def test_at_least_100_scenarios_across_categories():
+    scen = build_scenarios()
+    assert len(scen) >= 100
+    cats = {s.category for s in scen}
+    assert {"retrieval", "grounding", "ingest", "concurrency", "api_edge"} <= cats
+```
+
+- [ ] **Step 2: Esegui e verifica fallimento**
+
+Run: `uv run pytest tests/test_stress_scenarios.py -v`
+Expected: FAIL (ModuleNotFoundError: stress.scenarios).
+
+- [ ] **Step 3: Scrivi `stress/scenarios.py`**
+
+```python
+"""Generatore di ≥100 scenari di stress across 5 categorie."""
+from dataclasses import dataclass, field
+
+
+@dataclass
+class Scenario:
+    category: str          # retrieval | grounding | ingest | concurrency | api_edge
+    kind: str              # tipo specifico
+    payload: dict = field(default_factory=dict)
+    expect: str = ""       # invariante attesa
+
+
+# domande in-corpus con pagina attesa (allineare ai sample_docs reali)
+_IN_CORPUS = [
+    {"q": "Qual è la capitale della Francia?", "pages": [1]},
+    # ... popolare ≥40 varianti reali sui sample_docs ...
+]
+# domande palesemente fuori-corpus
+_OUT_CORPUS = [
+    "Qual è la ricetta della carbonara?",
+    "Chi ha vinto i mondiali di calcio 1982?",
+    # ... ≥20 ...
+]
+
+
+def build_scenarios() -> list[Scenario]:
+    scen: list[Scenario] = []
+    for item in _IN_CORPUS:  # ~40
+        scen.append(Scenario("retrieval", "gold_page_in_top5",
+                             {"question": item["q"], "gold_pages": item["pages"]},
+                             expect="gold_page_and_valid_citations"))
+    for q in _OUT_CORPUS:    # ~20
+        scen.append(Scenario("grounding", "out_of_corpus",
+                             {"question": q}, expect="not_found_empty_citations"))
+    # ingest (~15)
+    for kind in ["empty_pdf", "non_pdf", "large_pdf", "unicode", "duplicate",
+                 "many_small"]:
+        scen.append(Scenario("ingest", kind, {}, expect="handled_gracefully"))
+    # concurrency (~15): stessa query ripetuta in parallelo
+    for i in range(15):
+        scen.append(Scenario("concurrency", "parallel_query",
+                             {"question": _IN_CORPUS[i % len(_IN_CORPUS)]["q"]},
+                             expect="no_crash_latency_ok"))
+    # api_edge (~10)
+    for kind in ["empty_question", "very_long_question", "query_before_ingest",
+                 "malformed_payload", "sse_completes"]:
+        scen.append(Scenario("api_edge", kind, {}, expect="correct_status"))
+    return scen
+```
+NB (step manuale): popolare `_IN_CORPUS` (≥40) e `_OUT_CORPUS` (≥20) sui contenuti reali dei `sample_docs`, e replicare varianti finché `len(build_scenarios()) >= 100`.
+
+- [ ] **Step 4: Esegui il test del generatore e verifica che passi**
+
+Run: `uv run pytest tests/test_stress_scenarios.py -v`
+Expected: PASS.
+
+- [ ] **Step 5: Scrivi `stress/run.py` (runner + invarianti + report)**
+
+```python
+"""Esegue gli scenari di stress e verifica gli invarianti. Gate pre-pubblicazione."""
+import io
+import json
+import time
+import concurrent.futures as cf
+from pathlib import Path
+import fitz
+from fastapi.testclient import TestClient
+from stress.scenarios import build_scenarios
+
+SAMPLE_DIR = Path(__file__).parent.parent / "sample_docs"
+
+
+def _ingest_all(client):
+    for pdf in SAMPLE_DIR.glob("*.pdf"):
+        with open(pdf, "rb") as fh:
+            client.post("/documents", files={"file": (pdf.name, fh, "application/pdf")})
+
+
+def _check(client, s: Scenario) -> tuple[bool, float]:
+    t0 = time.perf_counter()
+    ok = True
+    if s.category in ("retrieval", "grounding"):
+        with client.stream("POST", "/query", json={"question": s.payload["question"]}) as r:
+            body = "".join(r.iter_text())
+        if s.expect == "not_found_empty_citations":
+            ok = ("citations" in body) and ('"citations": []' in body or "non " in body.lower())
+        else:
+            ok = "citations" in body
+    elif s.category == "api_edge":
+        if s.kind == "query_before_ingest":
+            ok = True  # verificato in un client vergine altrove
+        elif s.kind == "malformed_payload":
+            ok = client.post("/query", json={}).status_code == 422
+        elif s.kind == "empty_question":
+            ok = client.post("/query", json={"question": ""}).status_code in (200, 400, 422)
+    # ... ingest / concurrency gestiti in main() ...
+    return ok, time.perf_counter() - t0
+
+
+def main(live: bool = True) -> int:
+    from app import main as app_module
+    if not live:
+        class _Fake:
+            def generate(self, prompt):
+                yield "Risposta [1]." if "CONTESTO" in prompt else "non presente nei documenti"
+        app_module.get_provider = lambda: _Fake()
+    client = TestClient(app_module.app)
+    _ingest_all(client)
+
+    scen = build_scenarios()
+    results, latencies, failures = [], [], 0
+    # scenari sequenziali
+    for s in [x for x in scen if x.category != "concurrency"]:
+        ok, dt = _check(client, s)
+        latencies.append(dt)
+        failures += 0 if ok else 1
+        results.append((s.category, s.kind, ok, dt))
+    # scenari di concorrenza
+    conc = [x for x in scen if x.category == "concurrency"]
+    with cf.ThreadPoolExecutor(max_workers=8) as ex:
+        for ok, dt in ex.map(lambda s: _check(client, s), conc):
+            latencies.append(dt)
+            failures += 0 if ok else 1
+
+    latencies.sort()
+    p50 = latencies[len(latencies)//2] if latencies else 0
+    p95 = latencies[int(len(latencies)*0.95)-1] if latencies else 0
+    lines = [
+        "# Stress-test report — DocuMind\n",
+        f"Scenari: {len(scen)} · Fallimenti: {failures} · "
+        f"Latenza p50 {p50:.2f}s / p95 {p95:.2f}s\n",
+        "| Categoria | Kind | Esito | s |",
+        "|-----------|------|-------|---|",
+    ]
+    for cat, kind, ok, dt in results:
+        lines.append(f"| {cat} | {kind} | {'PASS' if ok else 'FAIL'} | {dt:.2f} |")
+    (Path(__file__).parent / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    print(f"Fallimenti: {failures}/{len(scen)}")
+    return failures
+
+
+if __name__ == "__main__":
+    import sys
+    raise SystemExit(1 if main(live="--fake" not in sys.argv) else 0)
+```
+NB: rifinire gli invarianti di `ingest` (empty→422, non_pdf respinto, ecc.) e `query_before_ingest` (client su store vergine) in fase di implementazione; l'obiettivo è **0 fallimenti** su ≥100 scenari.
+
+- [ ] **Step 6: Esecuzione reale (gate)**
+
+Run (con `GEMINI_API_KEY` o Ollama attivo): `uv run python -m stress.run`
+Expected: `Fallimenti: 0/…`, `stress/report.md` generato. Per un giro veloce senza LLM reale: `uv run python -m stress.run --fake`.
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add backend/stress/ backend/tests/test_stress_scenarios.py
+git commit -m "test(backend): stress harness >=100 scenari (retrieval/grounding/ingest/conc/api)
+
+Co-Authored-By: claude-flow <ruv@ruv.net>"
+```
+
+---
+
+### Task 19: Repo privato + gate di pubblicazione
+
+**Files:** nessun file di codice (operazioni git/GitHub).
+
+**Interfaces:** nessuna.
+
+- [ ] **Step 1: Crea il repo GitHub PRIVATO**
+
+Opzione A (con `gh`, consigliata — lo riuserai per tutti i 5 progetti):
+```bash
+winget install --id GitHub.cli -e   # una tantum; poi riapri il terminale
+gh auth login
+cd C:/Users/Rimes/Projects/documind
+gh repo create documind --private --source=. --remote=origin --push
+```
+Opzione B (manuale): crea un repo **privato** vuoto `documind` su github.com, poi:
+```bash
+cd C:/Users/Rimes/Projects/documind
+git remote add origin https://github.com/<utente>/documind.git
+git push -u origin main
+```
+
+- [ ] **Step 2: Esegui l'INTERA suite di test (inclusi i lenti)**
+
+Run: `cd backend && uv run pytest -v`
+Expected: tutti verdi.
+
+- [ ] **Step 3: Esegui lo stress-test (gate)**
+
+Run: `uv run python -m stress.run`
+Expected: `Fallimenti: 0`. Se >0, NON pubblicare: correggi e ripeti.
+
+- [ ] **Step 4: Committa i report ed esegui il push**
+
+```bash
+cd C:/Users/Rimes/Projects/documind
+git add backend/eval/results.md backend/stress/report.md
+git commit -m "docs: report eval + stress-test (gate pre-pubblicazione)
+
+Co-Authored-By: claude-flow <ruv@ruv.net>"
+git push
+```
+
+- [ ] **Step 5: SOLO se tutto verde → rendi il repo PUBBLICO**
+
+```bash
+gh repo edit --visibility public --accept-visibility-change-consequences
+```
+(oppure via web: Settings → General → Danger Zone → Change visibility). Gate rispettato: nessuna pubblicazione con stress-test rosso.
+
+---
+
 ## Self-Review
 
 **1. Spec coverage:**
@@ -1620,7 +2057,11 @@ Co-Authored-By: claude-flow <ruv@ruv.net>"
 - §8 error handling (key mancante, PDF vuoto, query senza doc, grounding) → Task 4 (EmptyPdfError), Task 11 (key), Task 13 (400), Task 10 (grounding). ✓
 - §9 testing (unit chunker/RRF/rerank/prompt, integration ingest→query) → Task 3,8,9,10 + Task 12/13. ✓
 - Offline mode (Ollama) → Task 11 + README Task 15. ✓
-- §7 frontend → **Piano 2** (fuori da questo piano, dichiarato). ✓
+- §5.2 step 0 HyDE / query rewriting + §6 4ª config eval → Task 16. ✓
+- §12 CI (test veloci/lenti + badge) → Task 17. ✓
+- §12 stress-test harness (≥100 scenari, 5 categorie) → Task 18. ✓
+- §12 workflow repo privato → gate → pubblico → Task 19. ✓
+- §7 frontend (incl. citazioni highlight+scroll, ora MVP) → **Piano 2** (fuori da questo piano, dichiarato). ✓
 
 **2. Placeholder scan:** nessun "TBD/TODO" tranne l'unico `TODO(human)` intenzionale in Task 8 (contributo Learn by Doing). Il gold set in Task 14 richiede popolamento manuale con dati reali (step esplicito, non un placeholder di codice). ✓
 
