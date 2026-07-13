@@ -43,6 +43,15 @@ def run() -> None:
         ingest_pdf(str(pdf), pdf.name, emb, store)
 
     configs = ["naive", "hybrid", "hybrid+rerank"]
+    _provider = None
+    try:
+        from app.generation.llm import get_provider
+        from app.retrieval.query_rewrite import expand_query
+
+        _provider = get_provider()
+        configs = configs + ["hybrid+rerank+hyde"]
+    except ValueError:
+        print("[eval] Provider LLM non disponibile: 4a config (HyDE) saltata.")
     agg = {c: {"hit1": 0.0, "hit": 0.0, "mrr": 0.0, "recall": 0.0} for c in configs}
 
     for item in GOLD:
@@ -54,12 +63,26 @@ def run() -> None:
         rerank_ids = reranker.rerank(item.question, pairs, top_n=settings.top_n_rerank)
 
         gold = [f"{item.doc_name}:{p}" for p in item.pages]
-        for cfg, ids in zip(configs, [naive_ids, hybrid_ids, rerank_ids]):
+        base = zip(["naive", "hybrid", "hybrid+rerank"], [naive_ids, hybrid_ids, rerank_ids])
+        for cfg, ids in base:
             keys = _keys_for(ids, store)
             agg[cfg]["hit1"] += hit_at_k(keys, gold, 1)
             agg[cfg]["hit"] += hit_at_k(keys, gold, K)
             agg[cfg]["mrr"] += mrr(keys, gold)
             agg[cfg]["recall"] += recall_at_k(keys, gold, K)
+
+        if _provider is not None:
+            exp = expand_query(item.question, _provider)
+            hyde_ids = hybrid_candidates(
+                store, emb.embed_query_dense(exp), svec, top_k=settings.top_k_dense
+            )
+            pairs2 = [(cid, store.get_chunk(cid).text) for cid in hyde_ids]
+            hyde_rr = reranker.rerank(item.question, pairs2, top_n=settings.top_n_rerank)
+            keys = _keys_for(hyde_rr, store)
+            agg["hybrid+rerank+hyde"]["hit1"] += hit_at_k(keys, gold, 1)
+            agg["hybrid+rerank+hyde"]["hit"] += hit_at_k(keys, gold, K)
+            agg["hybrid+rerank+hyde"]["mrr"] += mrr(keys, gold)
+            agg["hybrid+rerank+hyde"]["recall"] += recall_at_k(keys, gold, K)
 
     n = len(GOLD) or 1
     n_pdf = len(list(SAMPLE_DIR.glob("*.pdf")))

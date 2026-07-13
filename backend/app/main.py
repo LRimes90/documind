@@ -44,10 +44,12 @@ def query(req: QueryRequest):
         raise HTTPException(
             status_code=400, detail="Nessun documento indicizzato. Carica prima un PDF."
         )
-    chunks = retrieve(req.question, state.embedder, state.store, state.reranker)
+    provider = get_provider()
+    chunks = retrieve(
+        req.question, state.embedder, state.store, state.reranker, provider=provider
+    )
     context, citations = build_context(chunks)
     prompt = build_prompt(req.question, context)
-    provider = get_provider()
 
     def event_stream():
         for token in provider.generate(prompt):

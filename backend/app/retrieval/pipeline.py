@@ -5,13 +5,21 @@ from app.ingest.embeddings import Embedder
 from app.store import VectorStore
 from app.retrieval.rerank import Reranker
 from app.retrieval.hybrid import hybrid_candidates
+from app.retrieval.query_rewrite import expand_query
 
 
 def retrieve(
-    question: str, embedder: Embedder, store: VectorStore, reranker: Reranker
+    question: str,
+    embedder: Embedder,
+    store: VectorStore,
+    reranker: Reranker,
+    provider=None,
 ) -> list[Chunk]:
-    dense_vec = embedder.embed_query_dense(question)
-    sparse_vec = embedder.embed_query_sparse(question)
+    query_for_dense = question
+    if settings.use_hyde and provider is not None:
+        query_for_dense = expand_query(question, provider)
+    dense_vec = embedder.embed_query_dense(query_for_dense)
+    sparse_vec = embedder.embed_query_sparse(question)  # sparse sulle parole originali
     candidate_ids = hybrid_candidates(
         store, dense_vec, sparse_vec, top_k=settings.top_k_dense
     )
