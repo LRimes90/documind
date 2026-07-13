@@ -29,8 +29,9 @@ def recall_at_k(retrieved_pages: list[int], gold_pages: list[int], k: int) -> fl
     return len(found) / len(gold_pages) if gold_pages else 0.0
 
 
-def _pages_for(ids: list[str], store: VectorStore) -> list[int]:
-    return [store.get_chunk(cid).page for cid in ids]
+def _keys_for(ids: list[str], store: VectorStore) -> list[str]:
+    # chiave doc_name:page — evita collisioni tra pagine omonime di doc diversi
+    return [f"{store.get_chunk(cid).doc_name}:{store.get_chunk(cid).page}" for cid in ids]
 
 
 def run() -> None:
@@ -42,7 +43,7 @@ def run() -> None:
         ingest_pdf(str(pdf), pdf.name, emb, store)
 
     configs = ["naive", "hybrid", "hybrid+rerank"]
-    agg = {c: {"hit": 0.0, "mrr": 0.0, "recall": 0.0} for c in configs}
+    agg = {c: {"hit1": 0.0, "hit": 0.0, "mrr": 0.0, "recall": 0.0} for c in configs}
 
     for item in GOLD:
         dvec = emb.embed_query_dense(item.question)
@@ -52,24 +53,26 @@ def run() -> None:
         pairs = [(cid, store.get_chunk(cid).text) for cid in hybrid_ids]
         rerank_ids = reranker.rerank(item.question, pairs, top_n=settings.top_n_rerank)
 
+        gold = [f"{item.doc_name}:{p}" for p in item.pages]
         for cfg, ids in zip(configs, [naive_ids, hybrid_ids, rerank_ids]):
-            pages = _pages_for(ids, store)
-            agg[cfg]["hit"] += hit_at_k(pages, item.pages, K)
-            agg[cfg]["mrr"] += mrr(pages, item.pages)
-            agg[cfg]["recall"] += recall_at_k(pages, item.pages, K)
+            keys = _keys_for(ids, store)
+            agg[cfg]["hit1"] += hit_at_k(keys, gold, 1)
+            agg[cfg]["hit"] += hit_at_k(keys, gold, K)
+            agg[cfg]["mrr"] += mrr(keys, gold)
+            agg[cfg]["recall"] += recall_at_k(keys, gold, K)
 
     n = len(GOLD) or 1
     n_pdf = len(list(SAMPLE_DIR.glob("*.pdf")))
     lines = [
         "# Eval results — DocuMind retrieval\n",
         f"Dataset: {len(GOLD)} domande · sample_docs: {n_pdf} PDF\n",
-        "| Config | Hit@5 | MRR | Recall@5 |",
-        "|--------|-------|-----|----------|",
+        "| Config | Hit@1 | Hit@5 | MRR | Recall@5 |",
+        "|--------|-------|-------|-----|----------|",
     ]
     for cfg in configs:
         m = agg[cfg]
         lines.append(
-            f"| {cfg} | {m['hit']/n:.2%} | {m['mrr']/n:.3f} | {m['recall']/n:.2%} |"
+            f"| {cfg} | {m['hit1']/n:.2%} | {m['hit']/n:.2%} | {m['mrr']/n:.3f} | {m['recall']/n:.2%} |"
         )
     (Path(__file__).parent / "results.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     print("\n".join(lines))
