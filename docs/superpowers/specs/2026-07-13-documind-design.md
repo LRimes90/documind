@@ -9,7 +9,7 @@
 
 ## 1. Sintesi
 
-DocuMind è un'applicazione di **RAG multi-documento**: l'utente carica dei PDF e pone domande in linguaggio naturale; il sistema risponde citando **documento e pagina reali**. La qualità del retrieval è ottenuta con **hybrid search** (dense + sparse fusi via Reciprocal Rank Fusion) seguito da **reranking** con cross-encoder, e viene **misurata** da un eval harness riproducibile.
+DocuMind è un'applicazione di **RAG multi-documento**: l'utente carica dei PDF e pone domande in linguaggio naturale; il sistema risponde citando **documento e pagina reali**. La qualità del retrieval è ottenuta con **hybrid search** (dense + sparse fusi via Reciprocal Rank Fusion) seguito da **reranking** con cross-encoder, e viene **misurata** da un eval harness riproducibile. I modelli dense e reranker sono **multilingue (IT+EN)**: si possono porre domande in inglese su documenti italiani e viceversa (cross-lingual retrieval).
 
 **Non-goal (esplicitamente fuori scope MVP):** autenticazione/multi-utente, OCR di PDF scannerizzati, persistenza della chat history su DB, deploy in cloud.
 
@@ -98,13 +98,13 @@ Ogni unità ha uno scopo unico, interfaccia definita e testabilità isolata:
 1. Upload di uno o più PDF.
 2. `loader` estrae il testo **per pagina** (numero di pagina conservato).
 3. `chunker` spezza in chunk di ~500 token con overlap; ogni chunk = `{doc_id, doc_name, page, text}`.
-4. `indexer` calcola vettore **dense** (`bge-small-en-v1.5`) + **sparse** (BM25) via fastembed e fa upsert in Qdrant con entrambi i vettori nominati + payload dei metadati.
+4. `indexer` calcola vettore **dense** (`intfloat/multilingual-e5-small`, IT+EN) + **sparse** (BM25) via fastembed e fa upsert in Qdrant con entrambi i vettori nominati + payload dei metadati.
 5. Risposta: `{doc_id, doc_name, n_chunks, pages}`.
 
 ### 5.2 Query — `POST /query` (risposta in streaming SSE)
 1. Embedding della domanda (dense + sparse).
 2. **Hybrid search**: due ricerche Qdrant (es. top-20 dense, top-20 sparse) → **Reciprocal Rank Fusion** fonde le due classifiche per *rango* (non per punteggio grezzo, perché cosine e BM25 hanno scale incompatibili) in un'unica lista di candidati.
-3. **Rerank**: cross-encoder ONNX assegna un punteggio (domanda, chunk) ai candidati → tiene i **top-5**.
+3. **Rerank**: cross-encoder ONNX multilingue (`jina-reranker-v2-base-multilingual`) assegna un punteggio (domanda, chunk) ai candidati → tiene i **top-5**.
 4. `pipeline` costruisce il blocco di contesto con fonti numerate `[1]…[5]` (con doc + pagina).
 5. `generation`: prompt a Gemini — *"rispondi SOLO dal contesto fornito; cita le fonti come [n]; se il contesto non basta, dichiara che l'informazione non è nei documenti"* → token in streaming.
 6. Output finale: `answer` + `citations: [{n, doc_name, page, snippet}]`. Il frontend rende i chip `[n]` cliccabili che aprono il PDF alla pagina citata.
@@ -177,6 +177,6 @@ Ogni unità ha uno scopo unico, interfaccia definita e testabilità isolata:
 
 ## 11. Rischi noti
 
-- **Download modelli ONNX al primo avvio** (~150–300 MB): documentato nel README; mitigato dal fatto che fastembed cache-a i modelli.
+- **Download modelli ONNX al primo avvio** (dense multilingue ~470 MB + reranker → indicativamente ~600–900 MB totali): documentato nel README; mitigato dal fatto che fastembed cache-a i modelli dopo il primo download.
 - **Compatibilità wheel su Python 3.12**: mitigato dal pinning via `uv`.
 - **Qualità eval su dataset piccolo**: ~20 domande è indicativo, non statisticamente robusto; dichiarato apertamente nel README.
