@@ -32,13 +32,22 @@ async def add_document(file: UploadFile = File(...)):
         )
     except EmptyPdfError as e:
         raise HTTPException(status_code=422, detail=str(e))
+    except Exception as e:  # file corrotto / non-PDF / illeggibile
+        raise HTTPException(status_code=422, detail=f"File PDF non valido o illeggibile: {e}")
     finally:
-        os.unlink(tmp_path)
+        # su Windows un fitz.open fallito può lasciare il file bloccato:
+        # la pulizia non deve mai mascherare la risposta HTTP
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
     return info
 
 
 @app.post("/query")
 def query(req: QueryRequest):
+    if not req.question.strip():
+        raise HTTPException(status_code=400, detail="Domanda vuota.")
     state = get_state()
     if state.store.count() == 0:
         raise HTTPException(
