@@ -12,6 +12,8 @@ evaluation harness — not asserted.
 > so you can ask a question in English about an Italian document (or vice versa) and
 > still get the right passage.
 
+![DocuMind — a streamed answer with a clickable [1] citation opening the cited PDF page, with the source snippet highlighted](docs/screenshots/documind-03-source.png)
+
 ---
 
 ## Why this is different
@@ -62,8 +64,9 @@ flowchart LR
   torch), Gemini for generation (Ollama optional for fully-offline use).
 - **Isolation:** each module has one job (`ingest/`, `store`, `retrieval/`,
   `generation/`) and is unit-tested in isolation.
-- **Frontend:** a React UI with clickable citations that open the cited PDF page is
-  planned as a follow-up (see Roadmap).
+- **Frontend:** a React + TypeScript SPA (Vite, TailwindCSS, react-pdf) with a
+  streaming chat and clickable `[n]` citations that open the cited PDF page with the
+  source snippet highlighted — see [Frontend](#frontend).
 
 ## Quickstart
 
@@ -90,6 +93,32 @@ curl -N -X POST http://localhost:8000/query \
   -H "Content-Type: application/json" \
   -d '{"question": "Qual è la capitale della Francia?"}'
 ```
+
+## Frontend
+
+A React + TypeScript single-page app (**Vite · TailwindCSS · react-pdf**) providing a
+streaming chat with verifiable citations. Answers stream token-by-token over SSE, and
+each `[n]` marker is a button that opens the cited PDF page in a side viewer with the
+source snippet highlighted — the PDF is rendered **client-side**, so the page you read
+is exactly the page that was cited.
+
+```bash
+# 1. start the backend (port 8000) — see Quickstart
+cd backend && uv run uvicorn app.main:app
+
+# 2. in another terminal, start the frontend (port 5173)
+cd frontend
+npm install
+npm run dev            # open http://localhost:5173
+```
+
+The dev server proxies `/api → http://localhost:8000`, so there is no CORS setup in
+dev. Build for production with `npm run build`; run the logic/component tests with
+`npm run test` (Vitest + Testing Library — pure SSE/citation parsers are TDD-covered).
+
+| Upload & ask | Streamed answer with citation |
+|---|---|
+| ![initial](docs/screenshots/documind-01-initial.png) | ![answer](docs/screenshots/documind-02-answer.png) |
 
 ## Offline mode (no API key)
 
@@ -128,7 +157,6 @@ your data.
 
 ## Roadmap
 
-- React frontend with clickable, highlighted citations
 - Multi-format ingestion (DOCX / PPTX / XLSX)
 - Observability: tracing + per-query cost/latency dashboard
 - Vision / late-interaction retrieval (ColPali-style) for pages with tables & charts
@@ -137,4 +165,5 @@ your data.
 ## Tech stack
 
 `FastAPI` · `Qdrant` (embedded) · `fastembed` (multilingual-MiniLM + BM25 +
-jina-reranker-v2) · `Gemini` / `Ollama` · `uv` · `pytest`
+jina-reranker-v2) · `Gemini` / `Ollama` · `uv` · `pytest` · `React` · `TypeScript` ·
+`Vite` · `TailwindCSS` · `react-pdf` · `Vitest`
