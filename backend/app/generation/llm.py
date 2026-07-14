@@ -1,7 +1,14 @@
 """Provider LLM: Gemini (default) e Ollama (offline mode) dietro un'interfaccia."""
+import time
 from typing import Iterator, Protocol
 import httpx
 from app.config import settings
+
+_TRANSIENT_MARKERS = ("429", "RESOURCE_EXHAUSTED", "503", "UNAVAILABLE", "500", "INTERNAL")
+
+
+def _is_transient(exc: Exception) -> bool:
+    return any(m in str(exc) for m in _TRANSIENT_MARKERS)
 
 
 class LLMProvider(Protocol):
@@ -16,12 +23,23 @@ class GeminiProvider:
         self._model = settings.gemini_model
 
     def generate(self, prompt: str) -> Iterator[str]:
-        stream = self._client.models.generate_content_stream(
-            model=self._model, contents=prompt
-        )
-        for chunk in stream:
-            if chunk.text:
-                yield chunk.text
+        delay = 2.0
+        for attempt in range(5):
+            started = False
+            try:
+                stream = self._client.models.generate_content_stream(
+                    model=self._model, contents=prompt
+                )
+                for chunk in stream:
+                    started = True
+                    if chunk.text:
+                        yield chunk.text
+                return
+            except Exception as e:  # retry solo su errori transitori e prima del 1° token
+                if started or attempt == 4 or not _is_transient(e):
+                    raise
+                time.sleep(delay)
+                delay *= 2
 
 
 class OllamaProvider:

@@ -168,8 +168,38 @@ def main(live: bool = False) -> int:
     return failures
 
 
+def grounding_live() -> int:
+    """Verifica grounding con LLM reale: le domande fuori-corpus non devono allucinare."""
+    from app.config import settings as cfg
+
+    cfg.qdrant_path = tempfile.mkdtemp()
+    cfg.collection = "grounding"
+    import app.deps as deps
+
+    deps.get_state.cache_clear()
+    from app import main as app_module
+    from stress.scenarios import _OUT_OF_CORPUS
+
+    client = TestClient(app_module.app)
+    for pdf in SAMPLE_DIR.glob("*.pdf"):
+        with open(pdf, "rb") as fh:
+            _ingest(client, pdf.name, fh.read())
+
+    fails = 0
+    for q in _OUT_OF_CORPUS:
+        st, body = _query(client, q)
+        low = body.lower()
+        ok = st == 200 and (("non " in low) or ("not " in low))
+        fails += 0 if ok else 1
+        print(f"  {'OK  ' if ok else 'FAIL'} {q[:48]}")
+    print(f"[grounding-live] {len(_OUT_OF_CORPUS) - fails}/{len(_OUT_OF_CORPUS)} grounded (no hallucination)")
+    return fails
+
+
 if __name__ == "__main__":
     import sys
 
+    if "--grounding" in sys.argv:
+        raise SystemExit(1 if grounding_live() else 0)
     _live = "--fake" not in sys.argv
     raise SystemExit(1 if main(live=_live) else 0)
