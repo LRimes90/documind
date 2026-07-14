@@ -145,6 +145,9 @@ structural soak (0 failures). All 9 misses are grounding lapses of the 3–4B mo
 (94–98% vs 100% for 7B+) — retrieval, ingest, concurrency and API behavior were
 flawless on every model.
 
+Full per-model breakdown, open findings, and the append-only journal that backs the
+99.91% figure: [`docs/stress/`](docs/stress/).
+
 ## Testing
 
 ```bash
