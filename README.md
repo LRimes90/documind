@@ -47,13 +47,13 @@ stage ranks the correct source higher, and reranking puts it **first every time*
 ```mermaid
 flowchart LR
     subgraph Ingest
-      PDF[PDF] --> L[loader<br/>text per page] --> C[chunker<br/>page-aware] --> E1[fastembed<br/>dense + sparse]
-      E1 --> Q[(Qdrant<br/>embedded)]
+      PDF["PDF"] --> L["loader — text per page"] --> C["chunker — page-aware"] --> E1["fastembed — dense and sparse"]
+      E1 --> Q[("Qdrant embedded")]
     end
     subgraph Query
-      QN[question] --> HyDE[HyDE rewrite<br/>optional] --> E2[embed query]
-      E2 --> H[hybrid search<br/>dense + sparse] --> RRF[RRF fusion] --> RR[cross-encoder<br/>rerank] --> CTX[numbered context]
-      CTX --> LLM[Gemini / Ollama<br/>grounded answer] --> ANS[answer + citations]
+      QN["question"] --> HY["HyDE rewrite (optional)"] --> E2["embed query"]
+      E2 --> H["hybrid search — dense and sparse"] --> RRF["RRF fusion"] --> RR["cross-encoder rerank"] --> CTX["numbered context"]
+      CTX --> LLM["Gemini or Ollama — grounded answer"] --> ANS["answer and citations"]
       Q -. candidates .-> H
     end
 ```
