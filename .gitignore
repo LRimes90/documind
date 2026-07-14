@@ -36,3 +36,6 @@ Thumbs.db
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+
+# Journal campagna stress (artefatto locale, non versionato)
+backend/stress/campaign.jsonl

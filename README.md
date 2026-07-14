@@ -150,6 +150,7 @@ flawless on every model.
 ```bash
 uv run pytest                 # full suite (downloads models once)
 uv run pytest -m "not slow"   # fast suite (pure logic, no downloads) — this is what CI runs
+uv run python -m stress.campaign   # multi-model stress campaign (needs Ollama; resumable)
 ```
 
 The `slow` marker separates model-dependent tests from pure-logic ones so CI stays fast.
