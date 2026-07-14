@@ -1,6 +1,6 @@
 # Stress-test report — DocuMind
 
-Modalità: fake · Scenari: 100 · Fallimenti: 0 · Latenza p50 3.083s / p95 23.372s
+Modalità: live · Scenari: 100 · Fallimenti: 0 · Latenza p50 2.519s / p95 15.357s
 
 | Categoria | Pass | Totale |
 |-----------|------|--------|

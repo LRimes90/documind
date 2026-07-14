@@ -105,6 +105,11 @@ OLLAMA_MODEL=llama3.1
 
 Everything else (embeddings, retrieval, reranking) is already local via fastembed.
 
+✅ Verified offline on macOS with Ollama (`llama3.1` and `qwen2.5:7b-instruct`):
+pytest 28/28 · retrieval eval identical to cloud (Hit@1 100%, MRR 1.0 with rerank) ·
+grounding 20/20 out-of-corpus questions refused (zero hallucinations) ·
+stress 100/100 structural and 100/100 live.
+
 ## Testing
 
 ```bash

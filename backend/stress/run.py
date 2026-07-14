@@ -37,6 +37,19 @@ def _parse_citations(body: str):
     return None
 
 
+def _parse_answer(body: str) -> str:
+    """Ricompone il testo della risposta dai token SSE. I token spezzano le parole
+    (es. `data: "non"` + `data: " è"`): un substring-check sul body grezzo
+    produce falsi negativi."""
+    return "".join(
+        json.loads(line[6:])
+        for block in body.split("\n\n")
+        if "event: token" in block
+        for line in block.splitlines()
+        if line.startswith("data: ")
+    )
+
+
 def _query(client, question):
     with client.stream("POST", "/query", json={"question": question}) as r:
         body = "".join(r.iter_text())
@@ -62,7 +75,7 @@ def _check(client, s: Scenario, live: bool) -> bool:
         if st != 200:
             return False
         if live:
-            low = body.lower()
+            low = _parse_answer(body).lower()
             return ("non " in low) or ("not " in low)
         return "event: citations" in body
     if s.category == "concurrency":
@@ -188,7 +201,7 @@ def grounding_live() -> int:
     fails = 0
     for q in _OUT_OF_CORPUS:
         st, body = _query(client, q)
-        low = body.lower()
+        low = _parse_answer(body).lower()
         ok = st == 200 and (("non " in low) or ("not " in low))
         fails += 0 if ok else 1
         print(f"  {'OK  ' if ok else 'FAIL'} {q[:48]}")
