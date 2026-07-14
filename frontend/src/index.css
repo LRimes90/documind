@@ -2,5 +2,38 @@
 @tailwind components;
 @tailwind utilities;
 
-html, body, #root { height: 100%; }
-body { @apply bg-ink text-gray-200; }
+@layer base {
+  html, body, #root { height: 100%; }
+
+  body {
+    @apply bg-ink text-gray-200;
+    font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    /* Profondità: mesh di gradienti tenui verde+viola sul nero, fissati allo scroll. */
+    background-image:
+      radial-gradient(55rem 55rem at 12% -8%, rgba(52, 211, 153, 0.10), transparent 60%),
+      radial-gradient(50rem 50rem at 105% 0%, rgba(167, 139, 250, 0.13), transparent 55%),
+      radial-gradient(45rem 45rem at 50% 118%, rgba(167, 139, 250, 0.06), transparent 60%);
+    background-attachment: fixed;
+  }
+
+  ::selection { background: rgba(167, 139, 250, 0.35); color: #fff; }
+}
+
+/* Scrollbar sottile in tema scuro. */
+* { scrollbar-width: thin; scrollbar-color: #26262f transparent; }
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb {
+  background: #23232e;
+  background-clip: content-box;
+  border: 2px solid transparent;
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover { background: #30303f; background-clip: content-box; }
+
+/* Reveal delle bolle di messaggio (usato da MessageBubble). */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
