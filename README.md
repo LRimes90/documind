@@ -139,6 +139,12 @@ pytest 28/28 · retrieval eval identical to cloud (Hit@1 100%, MRR 1.0 with rera
 grounding 20/20 out-of-corpus questions refused (zero hallucinations) ·
 stress 100/100 structural and 100/100 live.
 
+Extended campaign: **10,400 scenario executions, 99.91% pass** across 5 local models
+(llama3.1, qwen2.5:7b-instruct, gemma3:4b, llama3.2:3b, phi4-mini) + 8,900-execution
+structural soak (0 failures). All 9 misses are grounding lapses of the 3–4B models
+(94–98% vs 100% for 7B+) — retrieval, ingest, concurrency and API behavior were
+flawless on every model.
+
 ## Testing
 
 ```bash
