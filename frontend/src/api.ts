@@ -61,18 +61,34 @@ export async function streamQuery(
   const reader = r.body.getReader();
   const decoder = new TextDecoder();
   let buf = "";
-  for (;;) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buf += decoder.decode(value, { stream: true });
-    const idx = buf.lastIndexOf("\n\n");
-    if (idx === -1) continue;
-    const ready = buf.slice(0, idx + 2);
-    buf = buf.slice(idx + 2);
-    for (const ev of parseSSE(ready)) {
-      if (ev.event === "token") cb.onToken(JSON.parse(ev.data));
-      else if (ev.event === "citations") cb.onCitations(JSON.parse(ev.data));
-      else if (ev.event === "done") cb.onDone();
+  // Un evento terminale (`done` o `error`) e' l'unica prova che lo stream sia
+  // finito per davvero: connessione chiusa senza di esso significa troncamento.
+  let terminated = false;
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      const idx = buf.lastIndexOf("\n\n");
+      if (idx === -1) continue;
+      const ready = buf.slice(0, idx + 2);
+      buf = buf.slice(idx + 2);
+      for (const ev of parseSSE(ready)) {
+        if (ev.event === "token") cb.onToken(JSON.parse(ev.data));
+        else if (ev.event === "citations") cb.onCitations(JSON.parse(ev.data));
+        else if (ev.event === "error") {
+          terminated = true;
+          cb.onError(JSON.parse(ev.data).detail || "Errore durante la generazione.");
+        } else if (ev.event === "done") {
+          terminated = true;
+          cb.onDone();
+        }
+      }
     }
+  } catch {
+    // Connessione caduta o evento malformato: sotto viene trattato come troncamento.
+  }
+  if (!terminated) {
+    cb.onError("Risposta interrotta: il server ha chiuso la connessione prima della fine.");
   }
 }
