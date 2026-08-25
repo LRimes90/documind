@@ -134,6 +134,29 @@ OLLAMA_MODEL=llama3.1
 
 Everything else (embeddings, retrieval, reranking) is already local via fastembed.
 
+Any OpenAI-compatible server works as well — LM Studio, vLLM, LocalAI, llama.cpp server,
+and Ollama itself, which also exposes `/v1/chat/completions`:
+
+```bash
+# in .env:
+LLM_PROVIDER=openai
+OPENAI_BASE_URL=http://localhost:1234/v1    # LM Studio default
+# OPENAI_BASE_URL=http://localhost:11434/v1 # Ollama also speaks this API
+OPENAI_MODEL=qwen3.5-9b
+OPENAI_API_KEY=                             # local servers ignore it
+```
+
+**Reasoning models.** `qwen3.5` streams its chain-of-thought in `delta.reasoning`, a field
+outside the OpenAI spec, and keeps `delta.content` at `""` until it has finished thinking —
+194 reasoning chunks before 2 content chunks, measured on Ollama 0.32.5. The provider drops
+the reasoning (it must not end up in a cited answer) and raises if the stream closes with no
+content at all, which is what happens when the token budget runs out mid-thought: a regular
+`finish_reason` + `[DONE]` with an empty answer would otherwise reach the UI as a success.
+
+Earlier notes in this repo claimed `qwen3.5` "loads into GPU but never emits a token" through
+Ollama. That diagnosis was wrong: the tokens were in `reasoning` all along, and a
+spec-compliant client reading only `content` counted zero.
+
 ✅ Verified offline on macOS with Ollama (`llama3.1` and `qwen2.5:7b-instruct`):
 pytest 28/28 · retrieval eval identical to cloud (Hit@1 100%, MRR 1.0 with rerank) ·
 grounding 20/20 out-of-corpus questions refused (zero hallucinations) ·
