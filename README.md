@@ -158,7 +158,7 @@ Ollama. That diagnosis was wrong: the tokens were in `reasoning` all along, and 
 spec-compliant client reading only `content` counted zero.
 
 ✅ Verified offline on macOS with Ollama (`llama3.1` and `qwen2.5:7b-instruct`):
-pytest 28/28 · retrieval eval identical to cloud (Hit@1 100%, MRR 1.0 with rerank) ·
+full test suite green · retrieval eval identical to cloud (Hit@1 100%, MRR 1.0 with rerank) ·
 grounding 20/20 out-of-corpus questions refused (zero hallucinations) ·
 stress 100/100 structural and 100/100 live.
 
