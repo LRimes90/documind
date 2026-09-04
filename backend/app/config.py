@@ -6,11 +6,16 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     # LLM
-    llm_provider: str = "gemini"            # "gemini" | "ollama"
+    llm_provider: str = "gemini"            # "gemini" | "ollama" | "openai"
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.5-flash"
     ollama_host: str = "http://localhost:11434"
     ollama_model: str = "llama3.1"
+    # Qualunque server che parla l'API /v1/chat/completions di OpenAI:
+    # LM Studio (:1234), vLLM (:8000), LocalAI, llama.cpp server, OpenAI stessa.
+    openai_base_url: str = "http://localhost:1234/v1"
+    openai_model: str = "local-model"
+    openai_api_key: str = ""                # i server locali lo ignorano
 
     # Modelli fastembed (multilingue IT+EN)
     # NB: multilingual-e5-small non è tra i modelli supportati da fastembed 0.8.0.
